@@ -1,0 +1,13 @@
+[package]
+name = "cargo-pin-nightly"
+version = "0.1.0"
+edition = "2024"
+description = "Cargo subcommand to pin rust-toolchain.toml to the nightly matching the latest beta release"
+
+[[bin]]
+name = "cargo-pin-nightly"
+path = "src/main.rs"
+
+[dependencies]
+ureq = "3"
+toml_edit = "0.25"
