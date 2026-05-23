@@ -1,11 +1,6 @@
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use toml_edit::DocumentMut;
+use std::process::Command;
 
 fn main() {
-    // 1. Fetch the "Fork Day" date from the official beta manifest.
-    // This gives us the nightly version that was just promoted to beta.
     let date = match fetch_fork_date() {
         Ok(d) => d,
         Err(e) => {
@@ -13,34 +8,27 @@ fn main() {
             std::process::exit(1);
         }
     };
-
     let channel = format!("nightly-{date}");
     println!("Targeting 'Fork Day' nightly: {channel}");
 
-    // 2. Walk up from cwd to find rust-toolchain.toml.
-    let toolchain_path = match find_toolchain_toml() {
-        Some(p) => p,
-        None => {
-            eprintln!("error: could not find rust-toolchain.toml in this directory or any parent");
-            std::process::exit(1);
-        }
-    };
-    println!("Found: {}", toolchain_path.display());
+    // Set it as the global rustup default
+    let status = Command::new("rustup")
+        .args(["default", &channel])
+        .status()
+        .expect("failed to run rustup");
 
-    // 3. Update (or create) the channel key.
-    match update_toolchain(&toolchain_path, &channel) {
-        Ok(_) => println!("Pinned channel = \"{channel}\""),
-        Err(e) => {
-            eprintln!("error: failed to update toolchain file: {e}");
-            std::process::exit(1);
-        }
+    if !status.success() {
+        eprintln!("error: rustup default failed");
+        std::process::exit(1);
     }
+    println!("Global default pinned to \"{channel}\"");
 }
 
 /// Fetches the date of the most recent "Fork Day" from the beta manifest.
 ///
 /// In the Rust release model, the 'train' moves every 6 weeks:
-/// 1. Friday (Day -6): The master branch is forked/promoted to the Beta channel.
+/// 1. Friday (Day -6): The master branch is forked/promoted to the Beta
+///    channel.
 /// 2. Thursday (Day 0): The previous Beta is promoted to Stable.
 ///
 /// By pulling the date from the Beta manifest, we get the exact Friday
@@ -64,34 +52,4 @@ fn fetch_fork_date() -> Result<String, Box<dyn std::error::Error>> {
     }
 
     Err("could not find `date` field in beta channel manifest".into())
-}
-
-/// Walks up the directory tree from cwd, returning the first
-/// rust-toolchain.toml found.
-fn find_toolchain_toml() -> Option<PathBuf> {
-    let mut dir = env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("rust-toolchain.toml");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-/// Updates (or sets) `toolchain.channel` in the given rust-toolchain.toml,
-/// preserving all other content and formatting.
-fn update_toolchain(path: &PathBuf, channel: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let content = fs::read_to_string(path)?;
-    let mut doc = content.parse::<DocumentMut>()?;
-
-    // Idiomatic toml_edit 0.25 approach using the Entry API
-    doc.entry("toolchain")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))["channel"] =
-        toml_edit::value(channel);
-
-    fs::write(path, doc.to_string())?;
-    Ok(())
 }
