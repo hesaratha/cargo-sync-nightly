@@ -2,10 +2,15 @@
 name = "cargo-sync-nightly"
 version = "0.1.0"
 edition = "2024"
-description = "Cargo subcommand to sync the global nightly to the nightly matching the latest beta release"
+description = "Sync project or global toolchains to the nightly matching the latest beta release"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+toml_edit = "0.25"
 ureq = "3"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints.rust]
 

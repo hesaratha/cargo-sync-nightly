@@ -1,27 +1,58 @@
-use std::process::Command;
+mod cli;
+mod toolchain;
 
-fn main() {
-    let date = match fetch_fork_date() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: could not fetch fork date: {e}");
-            std::process::exit(1);
+use std::env;
+use std::process::{Command, ExitCode};
+
+use cli::Args;
+use toolchain::ToolchainFile;
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn main() -> ExitCode {
+    let args = Args::parse_from(env::args_os()).unwrap_or_else(|error| error.exit());
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
         }
+    }
+}
+
+fn run(args: &Args) -> Result<()> {
+    let project = if args.globally {
+        println!("Updating global rustup default");
+        None
+    } else {
+        let path = toolchain::resolve_path(&env::current_dir()?, args.toolchain_file.as_deref())?;
+        let file = ToolchainFile::load(&path)?;
+        println!("Updating project toolchain: {}", path.display());
+        Some(file)
     };
+
+    let date = fetch_fork_date().map_err(|error| format!("could not fetch fork date: {error}"))?;
     let channel = format!("nightly-{date}");
     println!("Targeting 'Fork Day' nightly: {channel}");
 
-    // Set it as the global rustup default
-    let status = Command::new("rustup")
-        .args(["default", &channel])
-        .status()
-        .expect("failed to run rustup");
+    if let Some(file) = project {
+        if file.pin(&channel)? {
+            println!("Project channel pinned to \"{channel}\"");
+        } else {
+            println!("Project channel already pinned to \"{channel}\"");
+        }
+    } else {
+        let status = Command::new("rustup")
+            .args(["default", &channel])
+            .status()
+            .map_err(|error| format!("failed to run rustup: {error}"))?;
 
-    if !status.success() {
-        eprintln!("error: rustup default failed");
-        std::process::exit(1);
+        if !status.success() {
+            return Err(format!("rustup default failed: {status}").into());
+        }
+        println!("Global default pinned to \"{channel}\"");
     }
-    println!("Global default pinned to \"{channel}\"");
+    Ok(())
 }
 
 /// Fetches the date of the most recent "Fork Day" from the beta manifest.
@@ -34,7 +65,7 @@ fn main() {
 /// By pulling the date from the Beta manifest, we get the exact Friday
 /// that the current beta cycle began, allowing us to pin to the most
 /// "stable" version of nightly for this release cycle.
-fn fetch_fork_date() -> Result<String, Box<dyn std::error::Error>> {
+fn fetch_fork_date() -> Result<String> {
     // ureq 3.x now returns http::Response<ureq::Body>
     let response = ureq::get("https://static.rust-lang.org/dist/channel-rust-beta.toml").call()?;
 
