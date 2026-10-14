@@ -18,6 +18,11 @@ pub struct Args {
     /// Update existing file at PATH instead of searching ancestors
     #[arg(long, value_name = "PATH")]
     pub toolchain_file: Option<PathBuf>,
+
+    /// Preview without changes and exit with 0 if current, 1 if changes needed,
+    /// 2 on error
+    #[arg(long)]
+    pub check: bool,
 }
 
 impl Args {
@@ -49,7 +54,26 @@ mod tests {
             for flags in [vec![], vec!["--project"]] {
                 let args = parse(&[prefix.clone(), flags].concat())?;
                 assert!(!args.globally);
+                assert!(!args.check);
                 assert!(args.toolchain_file.is_none());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_check_with_each_target() -> crate::Result<()> {
+        for flags in [
+            vec!["--check"],
+            vec!["--check", "--project"],
+            vec!["--check", "--globally"],
+            vec!["--check", "--toolchain-file", "custom.toml"],
+        ] {
+            for prefix in [
+                vec!["cargo-sync-nightly"],
+                vec!["cargo-sync-nightly", "sync-nightly"],
+            ] {
+                assert!(parse(&[prefix, flags.clone()].concat())?.check);
             }
         }
         Ok(())

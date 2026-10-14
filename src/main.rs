@@ -1,7 +1,12 @@
 mod cli;
+mod rustup;
 mod toolchain;
 
+#[cfg(test)]
+mod tests;
+
 use std::env;
+use std::ffi::OsStr;
 use std::process::{Command, ExitCode};
 
 use cli::Args;
@@ -11,38 +16,60 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> ExitCode {
     let args = Args::parse_from(env::args_os()).unwrap_or_else(|error| error.exit());
-    match run(&args) {
-        Ok(()) => ExitCode::SUCCESS,
+    report(
+        run(&args, fetch_fork_date, OsStr::new("rustup")),
+        args.check,
+    )
+}
+
+fn report(result: Result<ExitCode>, check: bool) -> ExitCode {
+    match result {
+        Ok(status) => status,
         Err(error) => {
             eprintln!("error: {error}");
-            ExitCode::FAILURE
+            ExitCode::from(if check { 2 } else { 1 })
         }
     }
 }
 
-fn run(args: &Args) -> Result<()> {
+fn run(
+    args: &Args,
+    fetch_date: impl FnOnce() -> Result<String>,
+    rustup: &OsStr,
+) -> Result<ExitCode> {
     let project = if args.globally {
-        println!("Updating global rustup default");
+        println!("Global rustup default");
         None
     } else {
         let path = toolchain::resolve_path(&env::current_dir()?, args.toolchain_file.as_deref())?;
         let file = ToolchainFile::load(&path)?;
-        println!("Updating project toolchain: {}", path.display());
+        println!("Project toolchain: {}", path.display());
         Some(file)
     };
 
-    let date = fetch_fork_date().map_err(|error| format!("could not fetch fork date: {error}"))?;
+    let date = fetch_date().map_err(|error| format!("could not fetch fork date: {error}"))?;
     let channel = format!("nightly-{date}");
     println!("Targeting 'Fork Day' nightly: {channel}");
 
     if let Some(file) = project {
-        if file.pin(&channel)? {
+        let current = file.channel().map(str::to_owned);
+        let update = file.plan(&channel)?;
+        if args.check {
+            return Ok(preview(current.as_deref(), &channel, update.is_some()));
+        }
+        if let Some(update) = update {
+            update.apply()?;
             println!("Project channel pinned to \"{channel}\"");
         } else {
             println!("Project channel already pinned to \"{channel}\"");
         }
     } else {
-        let status = Command::new("rustup")
+        if args.check {
+            let current = rustup::default_toolchain(rustup)?;
+            let changed = !rustup::matches_channel(current.as_deref(), &channel);
+            return Ok(preview(current.as_deref(), &channel, changed));
+        }
+        let status = Command::new(rustup)
             .args(["default", &channel])
             .status()
             .map_err(|error| format!("failed to run rustup: {error}"))?;
@@ -52,7 +79,20 @@ fn run(args: &Args) -> Result<()> {
         }
         println!("Global default pinned to \"{channel}\"");
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
+}
+
+fn preview(current: Option<&str>, channel: &str, changed: bool) -> ExitCode {
+    if changed {
+        println!(
+            "Would change channel: {} -> {channel}",
+            current.unwrap_or("<unset>")
+        );
+        ExitCode::FAILURE
+    } else {
+        println!("Channel already current: {}", current.unwrap_or(channel));
+        ExitCode::SUCCESS
+    }
 }
 
 /// Fetches the date of the most recent "Fork Day" from the beta manifest.

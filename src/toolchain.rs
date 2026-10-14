@@ -63,7 +63,15 @@ impl ToolchainFile {
         })
     }
 
-    pub fn pin(mut self, channel: &str) -> Result<bool> {
+    pub fn channel(&self) -> Option<&str> {
+        self.document.get("toolchain")?.get("channel")?.as_str()
+    }
+
+    pub fn plan(mut self, channel: &str) -> Result<Option<ToolchainUpdate>> {
+        if self.channel() == Some(channel) {
+            return Ok(None);
+        }
+
         let mut new_table = Table::new();
         if self.document.is_empty() {
             let mut prefix = self
@@ -86,10 +94,6 @@ impl ToolchainFile {
             .as_table_like_mut()
             .ok_or("toolchain must be a table")?;
 
-        if table.get("channel").and_then(Item::as_str) == Some(channel) {
-            return Ok(false);
-        }
-
         let mut value = Value::from(channel);
         if let Some(previous) = table.get("channel").and_then(Item::as_value) {
             *value.decor_mut() = previous.decor().clone();
@@ -100,9 +104,23 @@ impl ToolchainFile {
             table.insert("channel", Item::Value(value));
         }
 
-        fs::write(&self.path, self.document.to_string())
+        Ok(Some(ToolchainUpdate {
+            path: self.path,
+            content: self.document.to_string(),
+        }))
+    }
+}
+
+pub struct ToolchainUpdate {
+    path: PathBuf,
+    content: String,
+}
+
+impl ToolchainUpdate {
+    pub fn apply(self) -> Result<()> {
+        fs::write(&self.path, self.content)
             .map_err(|error| format!("could not write {}: {error}", self.path.display()))?;
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -184,7 +202,10 @@ mod tests {
                         profile = 'minimal'\n";
         fs::write(&path, original)?;
 
-        assert!(ToolchainFile::load(&path)?.pin(CHANNEL)?);
+        ToolchainFile::load(&path)?
+            .plan(CHANNEL)?
+            .ok_or("expected change")?
+            .apply()?;
         assert_eq!(
             fs::read_to_string(&path)?,
             original.replace("nightly-old", CHANNEL)
@@ -199,7 +220,10 @@ mod tests {
         let original = "toolchain = { channel = \"nightly-old\", profile = 'minimal' } # Keep\n";
         fs::write(&path, original)?;
 
-        assert!(ToolchainFile::load(&path)?.pin(CHANNEL)?);
+        ToolchainFile::load(&path)?
+            .plan(CHANNEL)?
+            .ok_or("expected change")?
+            .apply()?;
         assert_eq!(
             fs::read_to_string(&path)?,
             original.replace("nightly-old", CHANNEL)
@@ -218,7 +242,10 @@ mod tests {
             "toolchain = { profile = 'minimal' }\n",
         ] {
             fs::write(&path, original)?;
-            assert!(ToolchainFile::load(&path)?.pin(CHANNEL)?);
+            ToolchainFile::load(&path)?
+                .plan(CHANNEL)?
+                .ok_or("expected change")?
+                .apply()?;
             let updated = fs::read_to_string(&path)?;
             let document = updated.parse::<DocumentMut>()?;
             assert_eq!(document["toolchain"]["channel"].as_str(), Some(CHANNEL));
@@ -263,7 +290,7 @@ mod tests {
             .set_modified(timestamp)?;
         let modified = fs::metadata(&path)?.modified()?;
 
-        assert!(!ToolchainFile::load(&path)?.pin(CHANNEL)?);
+        assert!(ToolchainFile::load(&path)?.plan(CHANNEL)?.is_none());
         assert_eq!(fs::read_to_string(&path)?, original);
         assert_eq!(fs::metadata(&path)?.modified()?, modified);
         Ok(())
